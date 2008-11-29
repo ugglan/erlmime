@@ -3,9 +3,17 @@
 
 -export([encode/2]).
 
+%%
+%% Encoding formats
+%%
 
-encode(quoted_printable, IoList) -> encode_qp(lists:flatten(IoList), [], 0).
+encode(quoted_printable, IoList) -> encode_qp(lists:flatten(IoList), [], 0);
 
+encode(base64, IoList) -> encode_b64(iolist_to_binary(IoList)).
+
+%%
+%%  Quoted printable encoding as specified in RFC 2045
+%%
 
 encode_qp([], Acc, Width) when Width<77 -> lists:reverse(Acc);
 
@@ -39,8 +47,39 @@ char_to_code(C) when is_integer(C) ->
 hexdigit(C) when C < 10 -> $0 + C;
 hexdigit(C) when C < 16 -> $A + (C - 10).
 
+%%
+%% Base 64 encoding, uses stdlib + split lines at 76 chars
+%%
 
-all_test() ->
+encode_b64(In) ->
+    encode_b64(base64:encode(In),[]).
+
+encode_b64(<<>>, Acc) -> lists:reverse(Acc);
+
+encode_b64(<<Row:76/binary, Rest/binary>>, Acc) ->
+    encode_b64(Rest, [$\n, Row | Acc]);
+
+encode_b64(Rest, Acc) -> encode_b64(<<>>, [Rest | Acc]).
+
+
+
+%%
+%% Tests
+%%
+
+base64_test() ->
+    BEncode=fun(X)->binary_to_list(iolist_to_binary(encode(base64, X))) end,
+    [
+     ?assertEqual(
+	  "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx\n"++
+	  "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx\n"++
+	  "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx\n"++
+	  "MTExMTExMTExMTExMTExMTExMTExMTExMQo=", BEncode([string:copies("1",196),$\n])),
+     ?assertEqual("SGVsbG8gd29ybGQh", BEncode("Hello world!")),
+     ?assertEqual("", BEncode(""))
+    ].
+
+quoted_printable_test() ->
     Txt = "1234567890",
     Blank75 = string:copies(" ",75), 
     Txt6 = string:copies(Txt,6), 
