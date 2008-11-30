@@ -1,13 +1,41 @@
 -module(mimetools).
 -include_lib("eunit/include/eunit.hrl").
 
--export([encode/2]).
+-export([encode/2, create_mail/2]).
+
+
+create_mail(Headers, Body) ->
+    [headers(Headers), body(Body)].
+
+
+
+headers(Headers) ->
+    [ header( Header, Value )  || {Header, Value} <- Headers ].
+
+
+header(Header, Value) ->
+    [ Header, <<": ">>, Value, <<"\r\n">> ].
+
+
+body({CharSet, Encoding, Body})->
+    body({"text/plain", CharSet, Encoding, Body});
+
+body({Type, CharSet, Encoding, Body}) ->
+    EncodingStr = case Encoding of
+		      quoted_printable -> <<"quoted-printable">>;
+		      base64 -> <<"base64">>
+				    end,
+    [ headers( [ { <<"Content-Type">>, [Type, <<"; charset=\"">>, CharSet, <<"\"">>] },
+		 { <<"Content-Transfer-Encoding">>, EncodingStr } ] ),
+      <<"\r\n">>,
+      encode(Encoding, Body) ].
+
 
 %%
 %% Encoding formats
 %%
 
-encode(quoted_printable, IoList) -> encode_qp(lists:flatten(IoList), [], 0);
+encode(quoted_printable, IoList) -> encode_qp(iolist_to_binary(IoList), [], 0);
 
 encode(base64, IoList) -> encode_b64(iolist_to_binary(IoList)).
 
@@ -19,40 +47,43 @@ encode(base64, IoList) -> encode_b64(iolist_to_binary(IoList)).
 %% kept as CRLF. This means that it is not suitable for non-text data.
 %%
 
-encode_qp([], Acc, Width) when Width<77 -> lists:reverse(Acc);
+encode_qp(<<>>, Acc, Width) when Width<77 -> lists:reverse(Acc);
 
-encode_qp([$\n|In], Acc, _Width) ->  encode_qp(In, [$\n,$\r | Acc], 0);
-encode_qp([$\r,$\n|In], Acc, _Width) -> encode_qp(In, [$\n,$\r | Acc], 0);
+encode_qp(<<$\n,In/binary>>, Acc, _Width) ->  encode_qp(In, [<<"\r\n">> | Acc], 0);
+encode_qp(<<"\r\n",In/binary>>, Acc, _Width) -> encode_qp(In, [<<"\r\n">> | Acc], 0);
 
 encode_qp(In, [L|Acc], Width) when Width>75 ->
-    encode_qp(In, [L,$\n,$\r,$= | Acc], 
-	   case is_list(L) of true -> 3; false -> 1 end );
+    encode_qp(In, [L,<<"=\r\n">> | Acc], 
+	      case is_binary(L) of true -> 3; false -> 1 end);
 
-encode_qp([C|In], Acc, Width) when C>32, C<127, C=/=61 -> 
+encode_qp(<<C,In/binary>>, Acc, Width) when C>32, C<127, C=/=61 -> 
     encode_qp(In, [C | Acc], Width+1);
 
-encode_qp([C,$\n|In], Acc, Width) when C==9; C==32 -> 
-    encode_qp([$\n|In], [char_to_code(C) | Acc], Width+3);
+encode_qp(<<C,$\n,In/binary>>, Acc, Width) when C==9; C==32 -> 
+    encode_qp(<<$\n,In/binary>>, [char_to_code(C) | Acc], Width+3);
 
-encode_qp([C], Acc, Width) when C==9; C==32 -> 
-    encode_qp([], [char_to_code(C) | Acc], Width+3);
+encode_qp(<<C>>, Acc, Width) when C==9; C==32 -> 
+    encode_qp(<<>>, [char_to_code(C) | Acc], Width+3);
 
-encode_qp([C|In], Acc, Width) when C==9; C==32 -> 
+encode_qp(<<C,In/binary>>, Acc, Width) when C==9; C==32 -> 
     encode_qp(In, [C | Acc], Width+1);
 
-encode_qp([C|In], Acc, Width) ->
+encode_qp(<<C,In/binary>>, Acc, Width) ->
     encode_qp(In, [char_to_code(C) | Acc], Width+3).
 
 
 char_to_code(C) when is_integer(C) ->
     <<Hi:4,Lo:4>> = <<C>>,
-    [$=, hexdigit(Hi), hexdigit(Lo)].
+    Hi8=hexdigit(Hi), Lo8=hexdigit(Lo),
+    <<$=, Hi8, Lo8 >>.
 
 hexdigit(C) when C < 10 -> $0 + C;
 hexdigit(C) when C < 16 -> $A + (C - 10).
 
 %%
-%% Base 64 encoding, uses stdlib + split lines at 76 chars
+%% Base 64 encoding 
+%%
+%% Uses stdlib, then splits lines at 76 chars and inserts CRLF
 %%
 
 encode_b64(In) ->
@@ -85,12 +116,16 @@ base64_test() ->
 
 quoted_printable_test() ->
     Txt = "1234567890",
-    Blank75 = string:copies(" ",75), 
+    Blank70 = string:copies(" ",70),     
+    Blank75 = Blank70++"     ",
     Txt6 = string:copies(Txt,6), 
     Txt7 = Txt6++Txt,
-    FlatEncode=fun(X)->lists:flatten(encode(quoted_printable, X)) end,
+    FlatEncode=fun(X)->binary_to_list(iolist_to_binary(encode(quoted_printable, X))) end,
     [
      ?assertEqual("", FlatEncode("")),
+
+     ?assertEqual(Blank75++"=\r\n"++Blank75++"=\r\n=20", FlatEncode(Blank75++Blank75++" ")),
+     ?assertEqual(Blank75++"=\r\n=3D"++Blank70++"  =\r\n   =3D", FlatEncode(Blank75++"="++Blank75++"=")),
      
      ?assertEqual(Txt7++"123456", FlatEncode(Txt7++"123456")),
      ?assertEqual(Txt7++"123=3D", FlatEncode(Txt7++"123=")),

@@ -13,19 +13,15 @@
 mail(From, To, Subject, Body) ->
     {ok, Pid} = smtp_fsm:start(),
     smtp_fsm:ehlo(Pid),
-    Mail=[
 
-	  "From: ",From,"\n",
-	  "To: ",To,"\n",
-	  "Subject: ",Subject,"\n",
-	  "Content-Type: text/plain; charset=\"utf-8\"\n",
-	  "Content-Transfer-Encoding: quoted-printable\n"
-	  "\n",
-	  mimetools:encode(quoted_printable, Body)
-	 ],
+    Mail = mimetools:create_mail(
+            [ { "From", From },
+              { "To", To },
+              { "Subject", Subject } ],
+            { "utf-8", quoted_printable, Body } ),
+    
     smtp_fsm:sendemail(Pid, clean_mail(From), clean_mail(To), Mail),
     smtp_fsm:close(Pid).
-
 
 
 clean_mail(Address) ->
